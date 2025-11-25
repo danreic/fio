@@ -1,0 +1,11 @@
+fio \
+ --name=nvmept-copy \
+ --ioengine=io_uring_cmd \
+ --cmd_type=nvme \
+ --filename=/dev/ng0n1 \
+ --rw=write \
+ --output=/Users/dan.reichhardt/fio/nvmept-copy-test-20251125-164241/0300/nvmept-copy300.output \
+ --output-format=json \
+ --size=268435456 \
+ --bs=262144 \
+ --buffer_pattern=15

@@ -36,6 +36,7 @@ enum td_ddir {
 	TD_DDIR_WRITE		= 1 << 1,
 	TD_DDIR_RAND		= 1 << 2,
 	TD_DDIR_TRIM		= 1 << 3,
+	TD_DDIR_COPY		= 1 << 4,
 	TD_DDIR_RW		= TD_DDIR_READ | TD_DDIR_WRITE,
 	TD_DDIR_RANDREAD	= TD_DDIR_READ | TD_DDIR_RAND,
 	TD_DDIR_RANDWRITE	= TD_DDIR_WRITE | TD_DDIR_RAND,
@@ -43,11 +44,13 @@ enum td_ddir {
 	TD_DDIR_RANDTRIM	= TD_DDIR_TRIM | TD_DDIR_RAND,
 	TD_DDIR_TRIMWRITE	= TD_DDIR_TRIM | TD_DDIR_WRITE,
 	TD_DDIR_RANDTRIMWRITE	= TD_DDIR_RANDTRIM | TD_DDIR_WRITE,
+	TD_DDIR_RANDCOPY	= TD_DDIR_COPY | TD_DDIR_RAND,
 };
 
 #define td_read(td)		((td)->o.td_ddir & TD_DDIR_READ)
 #define td_write(td)		((td)->o.td_ddir & TD_DDIR_WRITE)
 #define td_trim(td)		((td)->o.td_ddir & TD_DDIR_TRIM)
+#define td_copy(td)		((td)->o.td_ddir & TD_DDIR_COPY)
 #define td_rw(td)		(((td)->o.td_ddir & TD_DDIR_RW) == TD_DDIR_RW)
 #define td_random(td)		((td)->o.td_ddir & TD_DDIR_RAND)
 #define file_randommap(td, f)	(!(td)->o.norandommap && fio_file_axmap((f)))
@@ -72,9 +75,10 @@ static inline const char *ddir_str(enum td_ddir ddir)
 	static const char *__str[] = { NULL, "read", "write", "rw", "rand",
 				"randread", "randwrite", "randrw",
 				"trim", NULL, "trimwrite", NULL, "randtrim",
-				NULL, "randtrimwrite" };
+				NULL, "randtrimwrite", NULL, "copy", NULL, NULL,
+				NULL, "randcopy" };
 
-	return __str[ddir];
+	return (ddir < sizeof(__str) / sizeof(__str[0])) ? __str[ddir] : NULL;
 }
 
 #define ddir_rw_sum(arr)	\

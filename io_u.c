@@ -812,6 +812,8 @@ static enum fio_ddir get_rw_ddir(struct thread_data *td)
 		ddir = DDIR_WRITE;
 	else if (td_trim(td))
 		ddir = DDIR_TRIM;
+	else if (td_copy(td))
+		ddir = DDIR_WRITE;  /* Copy uses write path with special handling */
 	else
 		ddir = DDIR_INVAL;
 
@@ -1036,6 +1038,65 @@ static int fill_multi_range_io_u(struct thread_data *td, struct io_u *io_u)
 	return 1;
 }
 
+static int fill_multi_range_copy_io_u(struct thread_data *td, struct io_u *io_u)
+{
+	bool is_random;
+	uint64_t buflen, i = 0;
+	struct trim_range *range;
+	struct fio_file *f = io_u->file;
+	uint8_t *buf;
+
+	buf = io_u->buf;
+	buflen = 0;
+
+	while (i < td->o.num_range) {
+		range = (struct trim_range *)buf;
+		if (get_next_offset(td, io_u, &is_random)) {
+			dprint(FD_IO, "io_u %p, failed getting offset\n",
+			       io_u);
+			break;
+		}
+
+		io_u->buflen = get_next_buflen(td, io_u, is_random);
+		if (!io_u->buflen) {
+			dprint(FD_IO, "io_u %p, failed getting buflen\n", io_u);
+			break;
+		}
+
+		if (io_u->offset + io_u->buflen > io_u->file->real_file_size) {
+			dprint(FD_IO, "io_u %p, off=0x%llx + len=0x%llx exceeds file size=0x%llx\n",
+			       io_u,
+			       (unsigned long long) io_u->offset, io_u->buflen,
+			       (unsigned long long) io_u->file->real_file_size);
+			break;
+		}
+
+		range->start = io_u->offset;
+		range->len = io_u->buflen;
+		buflen += io_u->buflen;
+		f->last_start[io_u->ddir] = io_u->offset;
+		f->last_pos[io_u->ddir] = io_u->offset + range->len;
+
+		buf += sizeof(struct trim_range);
+		i++;
+
+		if (td_random(td) && file_randommap(td, io_u->file))
+			mark_random_map(td, io_u, io_u->offset, io_u->buflen);
+		dprint_io_u(io_u, "fill");
+	}
+	if (buflen) {
+		/*
+		 * Set buffer length as overall copy length for this IO, and
+		 * tell the ioengine about the number of ranges to be copied.
+		 */
+		io_u->buflen = buflen;
+		io_u->number_trim = i;  /* Reuse number_trim for copy ranges */
+		return 0;
+	}
+
+	return 1;
+}
+
 static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 {
 	bool is_random;
@@ -1064,6 +1125,9 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 
 	if (multi_range_trim(td, io_u)) {
 		if (fill_multi_range_io_u(td, io_u))
+			return 1;
+	} else if (multi_range_copy(td, io_u)) {
+		if (fill_multi_range_copy_io_u(td, io_u))
 			return 1;
 	} else {
 		/*
@@ -1105,11 +1169,12 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 	/*
 	 * mark entry before potentially trimming io_u
 	 */
-	if (!multi_range_trim(td, io_u) && td_random(td) && file_randommap(td, io_u->file))
+	if (!multi_range_trim(td, io_u) && !multi_range_copy(td, io_u) &&
+	    td_random(td) && file_randommap(td, io_u->file))
 		io_u->buflen = mark_random_map(td, io_u, offset, io_u->buflen);
 
 out:
-	if (!multi_range_trim(td, io_u))
+	if (!multi_range_trim(td, io_u) && !multi_range_copy(td, io_u))
 		dprint_io_u(io_u, "fill");
 	io_u->verify_offset = io_u->offset;
 	td->zone_bytes += io_u->buflen;
@@ -1926,7 +1991,8 @@ struct io_u *get_io_u(struct thread_data *td)
 
 	assert(fio_file_open(f));
 
-	if (ddir_rw(io_u->ddir) && !multi_range_trim(td, io_u)) {
+	if (ddir_rw(io_u->ddir) && !multi_range_trim(td, io_u) &&
+	    !multi_range_copy(td, io_u)) {
 		if (!io_u->buflen && !td_ioengine_flagged(td, FIO_NOIO)) {
 			dprint(FD_IO, "get_io_u: zero buflen on %p\n", io_u);
 			goto err_put;

@@ -1,0 +1,11 @@
+fio \
+ --name=nvmept-copy \
+ --ioengine=io_uring_cmd \
+ --cmd_type=nvme \
+ --filename=/dev/ng0n1 \
+ --rw=randcopy \
+ --output=/Users/dan.reichhardt/fio/nvmept-copy-test-20251125-164241/0101/nvmept-copy101.output \
+ --output-format=json \
+ --copy_source=/dev/ng0n1 \
+ --num_range=2 \
+ --size=16777216

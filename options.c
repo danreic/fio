@@ -2099,6 +2099,14 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = TD_DDIR_RANDTRIMWRITE,
 			    .help = "Randomly trim and write mix, trims preceding writes"
 			  },
+			  { .ival = "copy",
+			    .oval = TD_DDIR_COPY,
+			    .help = "Sequential copy"
+			  },
+			  { .ival = "randcopy",
+			    .oval = TD_DDIR_RANDCOPY,
+			    .help = "Random copy"
+			  },
 		},
 	},
 	{

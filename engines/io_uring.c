@@ -159,6 +159,10 @@ struct ioring_data {
 	struct cmdprio cmdprio;
 
 	struct nvme_dsm *dsm;
+	struct nvme_copy_cmd *copy_cmd;
+	unsigned int copy_cmd_size;
+	struct fio_file *copy_src_file;
+	struct nvme_data *copy_src_data;
 	uint32_t cdw12_flags[DDIR_RWDIR_CNT];
 	uint8_t write_opcode;
 
@@ -192,6 +196,8 @@ struct ioring_options {
 	unsigned int prchk;
 	char *pi_chk;
 	enum uring_cmd_type cmd_type;
+	char *copy_source;
+	unsigned long long copy_source_offset;
 };
 
 static const int ddir_to_op[2][2] = {
@@ -288,6 +294,27 @@ static struct fio_option options[] = {
 			    .help = "Issue Compare commands in the verification phase"
 			  },
 		},
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "copy_source",
+		.lname	= "Source file for copy operations",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct ioring_options, copy_source),
+		.help	= "Source file/device path for NVMe Copy operations. "
+			  "Required when rw=copy or rw=randcopy",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "copy_source_offset",
+		.lname	= "Source offset for copy operations",
+		.type	= FIO_OPT_ULL,
+		.off1	= offsetof(struct ioring_options, copy_source_offset),
+		.help	= "Starting offset in source file for copy operations. "
+			  "If not specified, uses same offset as destination",
+		.def	= "0",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_IOURING,
 	},
@@ -643,6 +670,50 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		populate_verify_io_u(td, io_u);
 		read_opcode = nvme_cmd_compare;
 		io_u_set(td, io_u, IO_U_F_VER_IN_DEV);
+	}
+
+	/*
+	 * Handle copy operations: copy uses DDIR_WRITE but needs special handling
+	 */
+	if (td_copy(td) && io_u->ddir == DDIR_WRITE && ld->copy_src_data) {
+		struct nvme_data *dst_data = FILE_ENG_DATA(io_u->file);
+		void *copy_ptr = ld->copy_cmd;
+		struct nvme_copy_cmd *copy_cmd;
+
+		if (!copy_ptr || !ld->copy_cmd_size) {
+			log_err("fio: copy_cmd not allocated\n");
+			return -EINVAL;
+		}
+
+		if (!dst_data) {
+			log_err("fio: destination file not initialized for copy\n");
+			return -EINVAL;
+		}
+
+		/* Validate LBA size compatibility (if not done during init) */
+		if (ld->copy_src_data->lba_size != dst_data->lba_size ||
+		    ld->copy_src_data->lba_ext != dst_data->lba_ext) {
+			log_err("fio: source and destination must have same LBA size "
+				"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, lba_ext=%u)\n",
+				ld->copy_src_data->lba_size, ld->copy_src_data->lba_ext,
+				dst_data->lba_size, dst_data->lba_ext);
+			return -EINVAL;
+		}
+
+		copy_ptr += io_u->index * ld->copy_cmd_size;
+		copy_cmd = (struct nvme_copy_cmd *)copy_ptr;
+
+		/* Calculate source offset: use copy_source_offset if set,
+		 * otherwise use same offset as destination.
+		 * Note: If copy_source_offset is explicitly set to 0, it will
+		 * be treated as "not set" and destination offset will be used.
+		 * This is a limitation of not being able to distinguish between
+		 * default (0) and explicitly set (0) for engine options. */
+		uint64_t src_offset = o->copy_source_offset ?
+				      o->copy_source_offset : io_u->offset;
+		return fio_nvme_uring_cmd_copy_prep(cmd, io_u, copy_cmd,
+						    ld->copy_src_data, dst_data,
+						    src_offset);
 	}
 
 	return fio_nvme_uring_cmd_prep(cmd, io_u,
@@ -1031,6 +1102,7 @@ static void fio_ioring_cleanup(struct thread_data *td)
 		free(ld->iovecs);
 		free(ld->fds);
 		free(ld->dsm);
+		free(ld->copy_cmd);
 		free(ld);
 	}
 }
@@ -1561,6 +1633,142 @@ static int fio_ioring_init(struct thread_data *td)
 			dsm = (struct nvme_dsm *)ptr;
 			dsm->nr_ranges = td->o.num_range;
 			ptr += dsm_size;
+		}
+	}
+
+	/* Allocate copy command buffers if copy mode is enabled */
+	if (ld->is_uring_cmd_eng && td_copy(td)) {
+		struct ioring_options *o = td->eo;
+		unsigned int copy_size;
+		struct fio_file *src_file = NULL;
+		struct nvme_data *src_data = NULL;
+		__u64 nlba = 0;
+		int j;
+
+		if (!o->copy_source) {
+			log_err("fio: copy_source must be specified when rw=copy or rw=randcopy\n");
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
+		}
+
+		/* Check Copy command support on destination file first */
+		if (td->files && td->files[0]) {
+			ret = fio_nvme_check_copy_support(td->files[0]);
+			if (ret) {
+				log_err("fio: Copy command not supported\n");
+				free(ld->io_u_index);
+				if (ld->dsm)
+					free(ld->dsm);
+				free(ld);
+				return 1;
+			}
+		}
+
+		/* Find or open source file */
+		for (j = 0; j < td->o.nr_files; j++) {
+			if (!strcmp(td->files[j]->file_name, o->copy_source)) {
+				src_file = td->files[j];
+				break;
+			}
+		}
+
+		if (!src_file) {
+			/* Source file not in file list, need to open it */
+			log_err("fio: copy_source file %s not found in file list\n", o->copy_source);
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
+		}
+
+		/* Get source namespace info */
+		src_data = FILE_ENG_DATA(src_file);
+		if (!src_data) {
+			src_data = calloc(1, sizeof(struct nvme_data));
+			ret = fio_nvme_get_info(src_file, &nlba, o->pi_act, src_data);
+			if (ret) {
+				log_err("fio: failed to get source namespace info\n");
+				if (ret == -ENOTSUP) {
+					log_err("fio: Copy command not supported by device\n");
+				}
+				free(src_data);
+				free(ld->io_u_index);
+				if (ld->dsm)
+					free(ld->dsm);
+				free(ld);
+				return ret;
+			}
+			FILE_SET_ENG_DATA(src_file, src_data);
+		}
+
+		/* Validate LBA size compatibility between source and destination */
+		/* Note: Destination file should be opened before init, but if not,
+		 * we'll validate during the first copy operation */
+		struct nvme_data *dst_data = NULL;
+		if (td->files && td->files[0])
+			dst_data = FILE_ENG_DATA(td->files[0]);
+
+		if (dst_data) {
+			if (src_data->lba_size != dst_data->lba_size ||
+			    src_data->lba_ext != dst_data->lba_ext) {
+				log_err("fio: source and destination must have same LBA size "
+					"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, lba_ext=%u)\n",
+					src_data->lba_size, src_data->lba_ext,
+					dst_data->lba_size, dst_data->lba_ext);
+				if (src_data && !FILE_ENG_DATA(src_file))
+					free(src_data);
+				free(ld->io_u_index);
+				if (ld->dsm)
+					free(ld->dsm);
+				free(ld);
+				return 1;
+			}
+		}
+
+		/* Validate source file is large enough for copy operations */
+		/* Note: td->o.size might be 0 if using io_size, so check both */
+		unsigned long long copy_size = td->o.size ? td->o.size : td->o.io_size;
+		if (copy_size && src_file->real_file_size < copy_size) {
+			log_err("fio: source file size (%llu) is smaller than "
+				"requested copy size (%llu)\n",
+				(unsigned long long)src_file->real_file_size,
+				(unsigned long long)copy_size);
+			if (src_data && !FILE_ENG_DATA(src_file))
+				free(src_data);
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
+		}
+
+		/* Check if source and destination are on the same controller */
+		/* Note: NVMe Copy typically requires same controller, but we
+		 * can't easily check this without additional controller ID info.
+		 * The copy operation will fail at the device level if they're
+		 * on different controllers. */
+
+		ld->copy_src_file = src_file;
+		ld->copy_src_data = src_data;
+
+		/* Allocate copy command buffers */
+		/* Support up to num_range ranges per command */
+		unsigned int max_ranges = td->o.num_range > 1 ? td->o.num_range : 1;
+		copy_size = sizeof(struct nvme_copy_cmd) +
+			    max_ranges * sizeof(struct nvme_copy_range);
+		ld->copy_cmd_size = copy_size;
+		ld->copy_cmd = calloc(td->o.iodepth, copy_size);
+		if (!ld->copy_cmd) {
+			log_err("fio: failed to allocate copy command buffers\n");
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
 		}
 	}
 

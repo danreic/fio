@@ -82,6 +82,7 @@ enum nvme_io_opcode {
 	nvme_cmd_dsm			= 0x09,
 	nvme_cmd_verify			= 0x0c,
 	nvme_cmd_io_mgmt_recv		= 0x12,
+	nvme_cmd_copy			= 0x19,
 	nvme_zns_cmd_mgmt_send		= 0x79,
 	nvme_zns_cmd_mgmt_recv		= 0x7a,
 };
@@ -418,6 +419,18 @@ struct nvme_dsm {
 	struct nvme_dsm_range range[];
 };
 
+struct nvme_copy_range {
+	__le32	cattr;
+	__le32	nlb;
+	__le64	slba;
+	__le64	dslba;
+};
+
+struct nvme_copy_cmd {
+	__u32 nr_ranges;
+	struct nvme_copy_range ranges[];
+};
+
 struct nvme_cmd_ext_io_opts {
 	__u32 io_flags;
 	__u16 apptag;
@@ -434,6 +447,14 @@ int fio_nvme_uring_cmd_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 			    struct iovec *iov, struct nvme_dsm *dsm,
 			    uint8_t read_opcode, uint8_t write_opcode,
 			    unsigned int cdw12_flags);
+
+int fio_nvme_check_copy_support(struct fio_file *f);
+
+int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
+				 struct nvme_copy_cmd *copy_cmd,
+				 struct nvme_data *src_data,
+				 struct nvme_data *dst_data,
+				 uint64_t src_offset);
 
 void fio_nvme_pi_fill(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 		      struct nvme_cmd_ext_io_opts *opts);

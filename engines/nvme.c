@@ -345,6 +345,76 @@ static void fio_nvme_uring_cmd_trim_prep(struct nvme_uring_cmd *cmd, struct io_u
 	}
 }
 
+int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
+				 struct nvme_copy_cmd *copy_cmd,
+				 struct nvme_data *src_data,
+				 struct nvme_data *dst_data,
+				 uint64_t src_offset)
+{
+	__u64 src_slba, dst_slba;
+	__u32 nlb;
+	struct trim_range *range;
+	uint8_t *buf_point;
+	int i, nr_ranges;
+
+	memset(cmd, 0, sizeof(struct nvme_uring_cmd));
+
+	cmd->opcode = nvme_cmd_copy;
+	cmd->nsid = dst_data->nsid;
+
+	if (io_u->number_trim > 1) {
+		/* Multiple ranges */
+		nr_ranges = io_u->number_trim;
+		buf_point = io_u->xfer_buf;
+		/* For multiple ranges, calculate source offset relative to first range */
+		uint64_t first_dst_offset = ((struct trim_range *)buf_point)->start;
+		for (i = 0; i < nr_ranges; i++) {
+			range = (struct trim_range *)buf_point;
+			/* Calculate source offset: if copy_source_offset is set, use it
+			 * as base, otherwise use same relative offset as destination.
+			 * Note: If src_offset is 0 (default or explicitly set), we use
+			 * the same offset as destination for each range. */
+			uint64_t range_src_offset;
+			if (!src_offset) {
+				/* No explicit source offset, use same as destination */
+				range_src_offset = range->start;
+			} else {
+				/* Source offset specified, calculate relative to first range */
+				range_src_offset = src_offset + (range->start - first_dst_offset);
+			}
+			src_slba = get_slba(src_data, range_src_offset);
+			dst_slba = get_slba(dst_data, range->start);
+			nlb = get_nlb(dst_data, range->len);
+
+			copy_cmd->ranges[i].cattr = 0;
+			copy_cmd->ranges[i].nlb = cpu_to_le32(nlb);
+			copy_cmd->ranges[i].slba = cpu_to_le64(src_slba);
+			copy_cmd->ranges[i].dslba = cpu_to_le64(dst_slba);
+			buf_point += sizeof(struct trim_range);
+		}
+		copy_cmd->nr_ranges = nr_ranges - 1;  /* 0-based */
+		cmd->data_len = sizeof(struct nvme_copy_cmd) +
+				nr_ranges * sizeof(struct nvme_copy_range);
+	} else {
+		/* Single range */
+		src_slba = get_slba(src_data, src_offset);
+		dst_slba = get_slba(dst_data, io_u->offset);
+		nlb = get_nlb(dst_data, io_u->xfer_buflen);
+
+		copy_cmd->nr_ranges = 0;  /* 0-based: 0 means 1 range */
+		copy_cmd->ranges[0].cattr = 0;
+		copy_cmd->ranges[0].nlb = cpu_to_le32(nlb);
+		copy_cmd->ranges[0].slba = cpu_to_le64(src_slba);
+		copy_cmd->ranges[0].dslba = cpu_to_le64(dst_slba);
+
+		cmd->data_len = sizeof(struct nvme_copy_cmd) + sizeof(struct nvme_copy_range);
+	}
+
+	cmd->addr = (__u64)(uintptr_t)copy_cmd;
+
+	return 0;
+}
+
 int fio_nvme_uring_cmd_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 			    struct iovec *iov, struct nvme_dsm *dsm,
 			    uint8_t read_opcode, uint8_t write_opcode,

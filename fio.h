@@ -641,6 +641,13 @@ static inline bool multi_range_trim(struct thread_data *td, struct io_u *io_u)
 {
 	if (io_u->ddir == DDIR_TRIM && td->o.num_range > 1)
 		return true;
+	return false;
+}
+
+static inline bool multi_range_copy(struct thread_data *td, struct io_u *io_u)
+{
+	if (td_copy(td) && io_u->ddir == DDIR_WRITE && td->o.num_range > 1)
+		return true;
 
 	return false;
 }
