@@ -356,6 +356,8 @@ int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 	struct trim_range *range;
 	uint8_t *buf_point;
 	int i, nr_ranges;
+	uint64_t first_dst_offset;
+	uint64_t range_src_offset;
 
 	memset(cmd, 0, sizeof(struct nvme_uring_cmd));
 
@@ -367,14 +369,13 @@ int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 		nr_ranges = io_u->number_trim;
 		buf_point = io_u->xfer_buf;
 		/* For multiple ranges, calculate source offset relative to first range */
-		uint64_t first_dst_offset = ((struct trim_range *)buf_point)->start;
+		first_dst_offset = ((struct trim_range *)buf_point)->start;
 		for (i = 0; i < nr_ranges; i++) {
 			range = (struct trim_range *)buf_point;
 			/* Calculate source offset: if copy_source_offset is set, use it
 			 * as base, otherwise use same relative offset as destination.
 			 * Note: If src_offset is 0 (default or explicitly set), we use
 			 * the same offset as destination for each range. */
-			uint64_t range_src_offset;
 			if (!src_offset) {
 				/* No explicit source offset, use same as destination */
 				range_src_offset = range->start;
@@ -543,6 +544,40 @@ int fio_nvme_pi_verify(struct nvme_data *data, struct io_u *io_u)
 	}
 
 	return ret;
+}
+
+int fio_nvme_check_copy_support(struct fio_file *f)
+{
+	struct nvme_id_ctrl ctrl;
+	int fd, err;
+
+	if (f->filetype != FIO_TYPE_CHAR) {
+		log_err("ioengine io_uring_cmd only works with nvme ns "
+			"generic char devices (/dev/ngXnY)\n");
+		return -EINVAL;
+	}
+
+	fd = open(f->file_name, O_RDONLY);
+	if (fd < 0)
+		return -errno;
+
+	err = nvme_identify(fd, 0, NVME_IDENTIFY_CNS_CTRL, NVME_CSI_NVM, &ctrl);
+	if (err) {
+		log_err("%s: failed to fetch identify ctrl\n", f->file_name);
+		close(fd);
+		return err;
+	}
+
+	/* Check for Copy command support (ONCS bit 8) */
+	if (!(le16_to_cpu(ctrl.oncs) & (1 << 8))) {
+		log_err("%s: Copy command not supported by controller (ONCS=0x%x)\n",
+			f->file_name, le16_to_cpu(ctrl.oncs));
+		close(fd);
+		return -ENOTSUP;
+	}
+
+	close(fd);
+	return 0;
 }
 
 static int nvme_identify(int fd, __u32 nsid, enum nvme_identify_cns cns,
