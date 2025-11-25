@@ -546,6 +546,22 @@ int fio_nvme_pi_verify(struct nvme_data *data, struct io_u *io_u)
 	return ret;
 }
 
+static int nvme_identify(int fd, __u32 nsid, enum nvme_identify_cns cns,
+			 enum nvme_csi csi, void *data)
+{
+	struct nvme_passthru_cmd cmd = {
+		.opcode         = nvme_admin_identify,
+		.nsid           = nsid,
+		.addr           = (__u64)(uintptr_t)data,
+		.data_len       = NVME_IDENTIFY_DATA_SIZE,
+		.cdw10          = cns,
+		.cdw11          = csi << NVME_IDENTIFY_CSI_SHIFT,
+		.timeout_ms     = NVME_DEFAULT_IOCTL_TIMEOUT,
+	};
+
+	return ioctl(fd, NVME_IOCTL_ADMIN_CMD, &cmd);
+}
+
 int fio_nvme_check_copy_support(struct fio_file *f)
 {
 	struct nvme_id_ctrl ctrl;
@@ -578,22 +594,6 @@ int fio_nvme_check_copy_support(struct fio_file *f)
 
 	close(fd);
 	return 0;
-}
-
-static int nvme_identify(int fd, __u32 nsid, enum nvme_identify_cns cns,
-			 enum nvme_csi csi, void *data)
-{
-	struct nvme_passthru_cmd cmd = {
-		.opcode         = nvme_admin_identify,
-		.nsid           = nsid,
-		.addr           = (__u64)(uintptr_t)data,
-		.data_len       = NVME_IDENTIFY_DATA_SIZE,
-		.cdw10          = cns,
-		.cdw11          = csi << NVME_IDENTIFY_CSI_SHIFT,
-		.timeout_ms     = NVME_DEFAULT_IOCTL_TIMEOUT,
-	};
-
-	return ioctl(fd, NVME_IOCTL_ADMIN_CMD, &cmd);
 }
 
 int fio_nvme_get_info(struct fio_file *f, __u64 *nlba, __u32 pi_act,
