@@ -389,8 +389,8 @@ int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 
 			copy_cmd->ranges[i].cattr = 0;
 			copy_cmd->ranges[i].nlb = cpu_to_le32(nlb);
-			copy_cmd->ranges[i].slba = cpu_to_le64(src_slba);
-			copy_cmd->ranges[i].dslba = cpu_to_le64(dst_slba);
+			copy_cmd->ranges[i].slba = cpu_to_le64((uint64_t)src_slba);
+			copy_cmd->ranges[i].dslba = cpu_to_le64((uint64_t)dst_slba);
 			buf_point += sizeof(struct trim_range);
 		}
 		copy_cmd->nr_ranges = nr_ranges - 1;  /* 0-based */
@@ -405,8 +405,8 @@ int fio_nvme_uring_cmd_copy_prep(struct nvme_uring_cmd *cmd, struct io_u *io_u,
 		copy_cmd->nr_ranges = 0;  /* 0-based: 0 means 1 range */
 		copy_cmd->ranges[0].cattr = 0;
 		copy_cmd->ranges[0].nlb = cpu_to_le32(nlb);
-		copy_cmd->ranges[0].slba = cpu_to_le64(src_slba);
-		copy_cmd->ranges[0].dslba = cpu_to_le64(dst_slba);
+		copy_cmd->ranges[0].slba = cpu_to_le64((uint64_t)src_slba);
+		copy_cmd->ranges[0].dslba = cpu_to_le64((uint64_t)dst_slba);
 
 		cmd->data_len = sizeof(struct nvme_copy_cmd) + sizeof(struct nvme_copy_range);
 	}

@@ -76,9 +76,26 @@ class CopyTest(FioJobCmdTest):
 
         super().check_result()
 
-        if 'rw' not in self.fio_opts or \
-                not self.passed or \
-                'json' not in self.fio_opts['output-format']:
+        if 'rw' not in self.fio_opts:
+            return
+
+        if not self.passed:
+            # If test failed, check stderr for useful error messages
+            if hasattr(self, 'filenames') and 'stderr' in self.filenames:
+                try:
+                    with open(self.filenames['stderr'], 'r') as f:
+                        stderr_content = f.read()
+                        if stderr_content:
+                            logging.error("fio stderr: %s", stderr_content)
+                except Exception:
+                    pass
+            return
+
+        if 'json' not in self.fio_opts['output-format']:
+            return
+
+        if not self.json_data:
+            logging.error("No JSON data available for test")
             return
 
         job = self.json_data['jobs'][0]
