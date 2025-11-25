@@ -679,6 +679,7 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		struct nvme_data *dst_data = FILE_ENG_DATA(io_u->file);
 		void *copy_ptr = ld->copy_cmd;
 		struct nvme_copy_cmd *copy_cmd;
+		uint64_t src_offset;
 
 		if (!copy_ptr || !ld->copy_cmd_size) {
 			log_err("fio: copy_cmd not allocated\n");
@@ -709,8 +710,8 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		 * be treated as "not set" and destination offset will be used.
 		 * This is a limitation of not being able to distinguish between
 		 * default (0) and explicitly set (0) for engine options. */
-		uint64_t src_offset = o->copy_source_offset ?
-				      o->copy_source_offset : io_u->offset;
+		src_offset = o->copy_source_offset ?
+			     o->copy_source_offset : io_u->offset;
 		return fio_nvme_uring_cmd_copy_prep(cmd, io_u, copy_cmd,
 						    ld->copy_src_data, dst_data,
 						    src_offset);
@@ -1640,8 +1641,11 @@ static int fio_ioring_init(struct thread_data *td)
 	if (ld->is_uring_cmd_eng && td_copy(td)) {
 		struct ioring_options *o = td->eo;
 		unsigned int copy_size;
+		unsigned long long copy_size_check;
+		unsigned int max_ranges;
 		struct fio_file *src_file = NULL;
 		struct nvme_data *src_data = NULL;
+		struct nvme_data *dst_data = NULL;
 		__u64 nlba = 0;
 		int j;
 
@@ -1708,7 +1712,6 @@ static int fio_ioring_init(struct thread_data *td)
 		/* Validate LBA size compatibility between source and destination */
 		/* Note: Destination file should be opened before init, but if not,
 		 * we'll validate during the first copy operation */
-		struct nvme_data *dst_data = NULL;
 		if (td->files && td->files[0])
 			dst_data = FILE_ENG_DATA(td->files[0]);
 
@@ -1731,12 +1734,12 @@ static int fio_ioring_init(struct thread_data *td)
 
 		/* Validate source file is large enough for copy operations */
 		/* Note: td->o.size might be 0 if using io_size, so check both */
-		unsigned long long copy_size = td->o.size ? td->o.size : td->o.io_size;
-		if (copy_size && src_file->real_file_size < copy_size) {
+		copy_size_check = td->o.size ? td->o.size : td->o.io_size;
+		if (copy_size_check && src_file->real_file_size < copy_size_check) {
 			log_err("fio: source file size (%llu) is smaller than "
 				"requested copy size (%llu)\n",
 				(unsigned long long)src_file->real_file_size,
-				(unsigned long long)copy_size);
+				(unsigned long long)copy_size_check);
 			if (src_data && !FILE_ENG_DATA(src_file))
 				free(src_data);
 			free(ld->io_u_index);
@@ -1757,7 +1760,7 @@ static int fio_ioring_init(struct thread_data *td)
 
 		/* Allocate copy command buffers */
 		/* Support up to num_range ranges per command */
-		unsigned int max_ranges = td->o.num_range > 1 ? td->o.num_range : 1;
+		max_ranges = td->o.num_range > 1 ? td->o.num_range : 1;
 		copy_size = sizeof(struct nvme_copy_cmd) +
 			    max_ranges * sizeof(struct nvme_copy_range);
 		ld->copy_cmd_size = copy_size;
