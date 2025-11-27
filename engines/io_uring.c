@@ -717,7 +717,7 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		 * default (0) and explicitly set (0) for engine options. */
 		src_offset = o->copy_source_offset ?
 			     o->copy_source_offset : io_u->offset;
-		log_info("fio: submitting NVMe copy io - dst=%s src=%s src_offset=%llu dst_offset=%llu len=%u",
+		log_info("fio: submitting NVMe copy io - dst=%s src=%s src_offset=%llu dst_offset=%llu len=%llu",
 			 io_u->file && io_u->file->file_name ?
 			 io_u->file->file_name : "unknown",
 			 ld->copy_src_file && ld->copy_src_file->file_name ?
@@ -725,7 +725,7 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 			 (o->copy_source ? o->copy_source : "unknown"),
 			 (unsigned long long)src_offset,
 			 (unsigned long long)io_u->offset,
-			 io_u->xfer_buflen);
+			 (unsigned long long)io_u->xfer_buflen);
 		return fio_nvme_uring_cmd_copy_prep(cmd, io_u, copy_cmd,
 						    ld->copy_src_data, dst_data,
 						    src_offset);
@@ -1689,7 +1689,6 @@ static int fio_ioring_init(struct thread_data *td)
 		}
 		log_info("fio: using copy_source %s", o->copy_source);
 
-		/* Check Copy command support on destination file first */
 		if (td->files && td->files[0]) {
 			log_info("fio: checking copy support for destination %s", td->files[0]->file_name);
 			ret = fio_nvme_check_copy_support(td->files[0]);
@@ -1703,7 +1702,6 @@ static int fio_ioring_init(struct thread_data *td)
 			}
 		}
 
-		/* Find or open source file */
 		for (j = 0; j < td->o.nr_files; j++) {
 			if (!strcmp(td->files[j]->file_name, o->copy_source)) {
 				src_file = td->files[j];
@@ -1712,7 +1710,6 @@ static int fio_ioring_init(struct thread_data *td)
 		}
 
 		if (!src_file) {
-			/* Source file not in file list, need to open it */
 			log_err("fio: copy_source file %s not found in file list\n", o->copy_source);
 			free(ld->io_u_index);
 			if (ld->dsm)
@@ -1721,7 +1718,6 @@ static int fio_ioring_init(struct thread_data *td)
 			return 1;
 		}
 
-		/* Get source namespace info */
 		src_data = FILE_ENG_DATA(src_file);
 		if (!src_data) {
 			src_data = calloc(1, sizeof(struct nvme_data));
@@ -1738,7 +1734,75 @@ static int fio_ioring_init(struct thread_data *td)
 				free(ld);
 				return ret;
 			}
-*** End Patch***
+			FILE_SET_ENG_DATA(src_file, src_data);
+		}
+
+		if (td->files && td->files[0])
+			dst_data = FILE_ENG_DATA(td->files[0]);
+
+		if (dst_data) {
+			log_info("fio: comparing LBA src(%u,%u) dst(%u,%u)",
+				 src_data->lba_size, src_data->lba_ext,
+				 dst_data->lba_size, dst_data->lba_ext);
+			if (src_data->lba_size != dst_data->lba_size ||
+			    src_data->lba_ext != dst_data->lba_ext) {
+				log_err("fio: source and destination must have same LBA size "
+					"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, dst: lba_ext=%u)\n",
+					src_data->lba_size, src_data->lba_ext,
+					dst_data->lba_size, dst_data->lba_ext);
+				if (src_data && !FILE_ENG_DATA(src_file))
+					free(src_data);
+				free(ld->io_u_index);
+				if (ld->dsm)
+					free(ld->dsm);
+				free(ld);
+				return 1;
+			}
+		}
+
+		copy_size_check = td->o.size ? td->o.size : td->o.io_size;
+		if (copy_size_check && src_file->real_file_size < copy_size_check) {
+			log_err("fio: source file size (%llu) is smaller than "
+				"requested copy size (%llu)\n",
+				(unsigned long long)src_file->real_file_size,
+				(unsigned long long)copy_size_check);
+			if (src_data && !FILE_ENG_DATA(src_file))
+				free(src_data);
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
+		}
+
+		ld->copy_src_file = src_file;
+		ld->copy_src_data = src_data;
+
+		max_ranges = td->o.num_range > 1 ? td->o.num_range : 1;
+		copy_size = sizeof(struct nvme_copy_cmd) +
+			    max_ranges * sizeof(struct nvme_copy_range);
+		ld->copy_cmd_size = copy_size;
+		ld->copy_cmd = calloc(td->o.iodepth, copy_size);
+		if (!ld->copy_cmd) {
+			log_err("fio: failed to allocate copy command buffers\n");
+			free(ld->io_u_index);
+			if (ld->dsm)
+				free(ld->dsm);
+			free(ld);
+			return 1;
+		}
+
+		log_info("fio: NVMe copy init - src=%s dst=%s copy_size=%llu lba_size=%u",
+			 o->copy_source ? o->copy_source : "unknown",
+			 td->files && td->files[0] && td->files[0]->file_name ?
+			 td->files[0]->file_name : "unknown",
+			 (unsigned long long)copy_size_check,
+			 ld->copy_src_data ? ld->copy_src_data->lba_size : 0);
+		log_info("fio: copy command buffer %p size %u", ld->copy_cmd, ld->copy_cmd_size);
+	} else {
+		log_info("fio: copy buffer allocation not required (is_uring=%d td_copy=%d)",
+			 ld->is_uring_cmd_eng, td_copy(td));
+	}
 
 	if (ld->is_uring_cmd_eng)
 		return fio_ioring_cmd_init(td, ld);
