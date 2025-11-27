@@ -300,7 +300,7 @@ static struct fio_option options[] = {
 	{
 		.name	= "copy_source",
 		.lname	= "Source file for copy operations",
-		.type	= FIO_OPT_STR,
+		.type	= FIO_OPT_STR_STORE,
 		.off1	= offsetof(struct ioring_options, copy_source),
 		.help	= "Source file/device path for NVMe Copy operations. "
 			  "Required when rw=copy or rw=randcopy",
