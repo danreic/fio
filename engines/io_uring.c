@@ -1569,6 +1569,10 @@ static int fio_ioring_init(struct thread_data *td)
 
 	ld->is_uring_cmd_eng = (td->io_ops->prep == fio_ioring_cmd_prep);
 
+	log_info("fio: fio_ioring_init ld=%p is_uring_cmd=%d td_copy=%d nr_files=%u open_files=%u",
+			ld, ld->is_uring_cmd_eng, td_copy(td),
+			td->o.nr_files, td->o.open_files);
+
 	/*
 	 * The internal io_uring queue depth must be a power-of-2, as that's
 	 * how the ring interface works. So round that up, in case the user
@@ -1656,6 +1660,8 @@ static int fio_ioring_init(struct thread_data *td)
 	}
 
 	/* Allocate copy command buffers if copy mode is enabled */
+	log_info("fio: copy allocation check is_uring=%d td_copy=%d",
+		 ld->is_uring_cmd_eng, td_copy(td));
 	if (ld->is_uring_cmd_eng && td_copy(td)) {
 		log_info("fio: copy allocation entry point triggered");
 		log_info("fio: copy init path triggered -- td_copy=%d copy_source=%s nr_files=%u open_files=%u",
@@ -1681,6 +1687,7 @@ static int fio_ioring_init(struct thread_data *td)
 			free(ld);
 			return 1;
 		}
+		log_info("fio: using copy_source %s", o->copy_source);
 
 		/* Check Copy command support on destination file first */
 		if (td->files && td->files[0]) {
