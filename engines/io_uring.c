@@ -675,6 +675,11 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 	/*
 	 * Handle copy operations: copy uses DDIR_WRITE but needs special handling
 	 */
+	if (td_copy(td)) {
+		log_info("fio: td_copy true, io_u->ddir=%d ld->copy_src_data=%p",
+			 io_u->ddir, ld->copy_src_data);
+	}
+
 	if (td_copy(td) && io_u->ddir == DDIR_WRITE && ld->copy_src_data) {
 		struct nvme_data *dst_data = FILE_ENG_DATA(io_u->file);
 		void *copy_ptr = ld->copy_cmd;
@@ -1648,6 +1653,11 @@ static int fio_ioring_init(struct thread_data *td)
 
 	/* Allocate copy command buffers if copy mode is enabled */
 	if (ld->is_uring_cmd_eng && td_copy(td)) {
+		log_info("fio: copy init path triggered -- td_copy=%d copy_source=%s nr_files=%u open_files=%u",
+			 td_copy(td),
+			 o->copy_source ? o->copy_source : "none",
+			 td->o.nr_files,
+			 td->o.open_files);
 		struct ioring_options *o = td->eo;
 		unsigned int copy_size;
 		unsigned long long copy_size_check;
@@ -1669,6 +1679,7 @@ static int fio_ioring_init(struct thread_data *td)
 
 		/* Check Copy command support on destination file first */
 		if (td->files && td->files[0]) {
+			log_info("fio: checking copy support for destination %s", td->files[0]->file_name);
 			ret = fio_nvme_check_copy_support(td->files[0]);
 			if (ret) {
 				log_err("fio: Copy command not supported\n");
@@ -1725,10 +1736,13 @@ static int fio_ioring_init(struct thread_data *td)
 			dst_data = FILE_ENG_DATA(td->files[0]);
 
 		if (dst_data) {
+			log_info("fio: comparing LBA src(%u,%u) dst(%u,%u)",
+				 src_data->lba_size, src_data->lba_ext,
+				 dst_data->lba_size, dst_data->lba_ext);
 			if (src_data->lba_size != dst_data->lba_size ||
 			    src_data->lba_ext != dst_data->lba_ext) {
 				log_err("fio: source and destination must have same LBA size "
-					"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, lba_ext=%u)\n",
+					"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, dst: lba_ext=%u)\n",
 					src_data->lba_size, src_data->lba_ext,
 					dst_data->lba_size, dst_data->lba_ext);
 				if (src_data && !FILE_ENG_DATA(src_file))
