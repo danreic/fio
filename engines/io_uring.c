@@ -712,6 +712,15 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		 * default (0) and explicitly set (0) for engine options. */
 		src_offset = o->copy_source_offset ?
 			     o->copy_source_offset : io_u->offset;
+		log_info("fio: submitting NVMe copy io - dst=%s src=%s src_offset=%llu dst_offset=%llu len=%u",
+			 io_u->file && io_u->file->file_name ?
+			 io_u->file->file_name : "unknown",
+			 ld->copy_src_file && ld->copy_src_file->file_name ?
+			 ld->copy_src_file->file_name :
+			 (o->copy_source ? o->copy_source : "unknown"),
+			 (unsigned long long)src_offset,
+			 (unsigned long long)io_u->offset,
+			 io_u->xfer_buflen);
 		return fio_nvme_uring_cmd_copy_prep(cmd, io_u, copy_cmd,
 						    ld->copy_src_data, dst_data,
 						    src_offset);
@@ -1773,6 +1782,13 @@ static int fio_ioring_init(struct thread_data *td)
 			free(ld);
 			return 1;
 		}
+
+		log_info("fio: NVMe copy init - src=%s dst=%s copy_size=%llu lba_size=%u",
+			 o->copy_source ? o->copy_source : "unknown",
+			 td->files && td->files[0] && td->files[0]->file_name ?
+			 td->files[0]->file_name : "unknown",
+			 (unsigned long long)copy_size_check,
+			 ld->copy_src_data ? ld->copy_src_data->lba_size : 0);
 	}
 
 	if (ld->is_uring_cmd_eng)
