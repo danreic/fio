@@ -1555,6 +1555,10 @@ static int fio_ioring_init(struct thread_data *td)
 	if (o->sqpoll_thread)
 		o->registerfiles = 1;
 
+	log_info("fio: fio_ioring_init start cmd_type=%d td_copy=%d is_uring_cmd=%d nr_files=%u open_files=%u",
+			o->cmd_type, td_copy(td), ld->is_uring_cmd_eng,
+			td->o.nr_files, td->o.open_files);
+
 	if (o->registerfiles && td->o.nr_files != td->o.open_files) {
 		log_err("fio: io_uring registered files require nr_files to "
 			"be identical to open_files\n");
@@ -1653,6 +1657,7 @@ static int fio_ioring_init(struct thread_data *td)
 
 	/* Allocate copy command buffers if copy mode is enabled */
 	if (ld->is_uring_cmd_eng && td_copy(td)) {
+		log_info("fio: copy allocation entry point triggered");
 		log_info("fio: copy init path triggered -- td_copy=%d copy_source=%s nr_files=%u open_files=%u",
 			 td_copy(td),
 			 o->copy_source ? o->copy_source : "none",
@@ -1726,84 +1731,7 @@ static int fio_ioring_init(struct thread_data *td)
 				free(ld);
 				return ret;
 			}
-			FILE_SET_ENG_DATA(src_file, src_data);
-		}
-
-		/* Validate LBA size compatibility between source and destination */
-		/* Note: Destination file should be opened before init, but if not,
-		 * we'll validate during the first copy operation */
-		if (td->files && td->files[0])
-			dst_data = FILE_ENG_DATA(td->files[0]);
-
-		if (dst_data) {
-			log_info("fio: comparing LBA src(%u,%u) dst(%u,%u)",
-				 src_data->lba_size, src_data->lba_ext,
-				 dst_data->lba_size, dst_data->lba_ext);
-			if (src_data->lba_size != dst_data->lba_size ||
-			    src_data->lba_ext != dst_data->lba_ext) {
-				log_err("fio: source and destination must have same LBA size "
-					"(src: lba_size=%u, lba_ext=%u; dst: lba_size=%u, dst: lba_ext=%u)\n",
-					src_data->lba_size, src_data->lba_ext,
-					dst_data->lba_size, dst_data->lba_ext);
-				if (src_data && !FILE_ENG_DATA(src_file))
-					free(src_data);
-				free(ld->io_u_index);
-				if (ld->dsm)
-					free(ld->dsm);
-				free(ld);
-				return 1;
-			}
-		}
-
-		/* Validate source file is large enough for copy operations */
-		/* Note: td->o.size might be 0 if using io_size, so check both */
-		copy_size_check = td->o.size ? td->o.size : td->o.io_size;
-		if (copy_size_check && src_file->real_file_size < copy_size_check) {
-			log_err("fio: source file size (%llu) is smaller than "
-				"requested copy size (%llu)\n",
-				(unsigned long long)src_file->real_file_size,
-				(unsigned long long)copy_size_check);
-			if (src_data && !FILE_ENG_DATA(src_file))
-				free(src_data);
-			free(ld->io_u_index);
-			if (ld->dsm)
-				free(ld->dsm);
-			free(ld);
-			return 1;
-		}
-
-		/* Check if source and destination are on the same controller */
-		/* Note: NVMe Copy typically requires same controller, but we
-		 * can't easily check this without additional controller ID info.
-		 * The copy operation will fail at the device level if they're
-		 * on different controllers. */
-
-		ld->copy_src_file = src_file;
-		ld->copy_src_data = src_data;
-
-		/* Allocate copy command buffers */
-		/* Support up to num_range ranges per command */
-		max_ranges = td->o.num_range > 1 ? td->o.num_range : 1;
-		copy_size = sizeof(struct nvme_copy_cmd) +
-			    max_ranges * sizeof(struct nvme_copy_range);
-		ld->copy_cmd_size = copy_size;
-		ld->copy_cmd = calloc(td->o.iodepth, copy_size);
-		if (!ld->copy_cmd) {
-			log_err("fio: failed to allocate copy command buffers\n");
-			free(ld->io_u_index);
-			if (ld->dsm)
-				free(ld->dsm);
-			free(ld);
-			return 1;
-		}
-
-		log_info("fio: NVMe copy init - src=%s dst=%s copy_size=%llu lba_size=%u",
-			 o->copy_source ? o->copy_source : "unknown",
-			 td->files && td->files[0] && td->files[0]->file_name ?
-			 td->files[0]->file_name : "unknown",
-			 (unsigned long long)copy_size_check,
-			 ld->copy_src_data ? ld->copy_src_data->lba_size : 0);
-	}
+*** End Patch***
 
 	if (ld->is_uring_cmd_eng)
 		return fio_ioring_cmd_init(td, ld);
