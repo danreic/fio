@@ -533,8 +533,10 @@ static void put_job(struct thread_data *td)
 	profile_td_exit(td);
 	flow_exit_job(td);
 
-	if (td->error)
+	if (td->error) {
+		log_err("fio: %s\n", td->verror);
 		log_info("fio: %s\n", td->verror);
+	}
 
 	fio_options_free(td);
 	fio_dump_options_free(td);
