@@ -51,6 +51,10 @@ class CopyTest(FioJobCmdTest):
             f"--output-format={self.fio_opts['output-format']}",
         ]
 
+        copy_src = self.fio_opts.get('copy_source')
+        if copy_src and copy_src != self.fio_opts['filename']:
+            fio_args.append(f"--filename={copy_src}")
+
         # Add copy_source if specified
         if 'copy_source' in self.fio_opts:
             fio_args.append(f"--copy_source={self.fio_opts['copy_source']}")
